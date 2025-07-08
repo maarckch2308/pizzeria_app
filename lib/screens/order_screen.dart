@@ -1,76 +1,126 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/pizza_model.dart';
 
-class OrderScreen extends StatefulWidget {
-  final Pizza pizza;
+class OrderScreen extends StatelessWidget {
+  const OrderScreen({super.key});
 
-  OrderScreen({required this.pizza});
-
-  @override
-  _OrderScreenState createState() => _OrderScreenState();
-}
-
-class _OrderScreenState extends State<OrderScreen> {
-  int cantidad = 1;
-  String mesa = '';
-
-  void _enviarPedido() {
-    if (mesa.isNotEmpty) {
-      // Aquí puedes usar Firebase, SQLite o simplemente imprimir por ahora
-      print("🍕 Pedido enviado a la cocina:");
-      print("Pizza: ${widget.pizza.nombre}");
-      print("Cantidad: $cantidad");
-      print("Mesa: $mesa");
-
+  // Cambiar estado a "listo"
+  void _marcarPedidoListo(BuildContext context, String pedidoId) {
+    FirebaseFirestore.instance.collection('orders').doc(pedidoId).update({
+      'estado': 'listo',
+    }).then((_) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Pedido enviado a la cocina")),
+        const SnackBar(content: Text('Pedido marcado como listo')),
       );
-
-      Navigator.pop(context);
-    }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text("Pedido")),
-      body: Padding(
-        padding: EdgeInsets.all(16.0),
-        child: Column(
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Pedidos'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'Pendientes'),
+              Tab(text: 'Listos'),
+            ],
+          ),
+        ),
+        body: TabBarView(
           children: [
-            Text(widget.pizza.nombre, style: TextStyle(fontSize: 24)),
-            Text("Precio: \$${widget.pizza.precio.toStringAsFixed(2)}"),
-            Row(
-              children: [
-                Text("Cantidad: "),
-                IconButton(
-                  icon: Icon(Icons.remove),
-                  onPressed: () {
-                    if (cantidad > 1) setState(() => cantidad--);
-                  },
-                ),
-                Text("$cantidad"),
-                IconButton(
-                  icon: Icon(Icons.add),
-                  onPressed: () {
-                    setState(() => cantidad++);
-                  },
-                ),
-              ],
-            ),
-            TextField(
-              decoration: InputDecoration(labelText: "Número de mesa"),
-              keyboardType: TextInputType.number,
-              onChanged: (value) => mesa = value,
-            ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              child: Text("Enviar pedido"),
-              onPressed: _enviarPedido,
-            )
+            // Pestaña Pedidos Pendientes
+            _buildPedidoList(context, estado: 'pendiente'),
+            // Pestaña Pedidos Listos
+            _buildPedidoList(context, estado: 'listo'),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildPedidoList(BuildContext context, {required String estado}) {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('orders')
+          .where('estado', isEqualTo: estado)
+          .orderBy('fecha')
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return Center(child: Text('No hay pedidos $estado'));
+        }
+
+        final pedidos = snapshot.data!.docs;
+
+        return ListView.builder(
+          itemCount: pedidos.length,
+          itemBuilder: (context, index) {
+            final pedido = pedidos[index];
+            final pedidoId = pedido.id;
+            final mesa = pedido['mesa'];
+            final fecha = pedido['fecha'].toDate();
+
+            return Card(
+              margin: const EdgeInsets.all(10),
+              child: ExpansionTile(
+                title: Text('Mesa $mesa'),
+                subtitle: Text(
+                  'Fecha: ${fecha.toLocal().toString().substring(0, 16)}',
+                ),
+                children: [
+                  StreamBuilder<QuerySnapshot>(
+                    stream: FirebaseFirestore.instance
+                        .collection('orders')
+                        .doc(pedidoId)
+                        .collection('items')
+                        .snapshots(),
+                    builder: (context, itemsSnapshot) {
+                      if (itemsSnapshot.connectionState == ConnectionState.waiting) {
+                        return const CircularProgressIndicator();
+                      }
+                      if (!itemsSnapshot.hasData || itemsSnapshot.data!.docs.isEmpty) {
+                        return const Text('Sin items');
+                      }
+
+                      final items = itemsSnapshot.data!.docs
+                          .map((doc) => PizzaItem.fromMap(
+                              doc.data() as Map<String, dynamic>))
+                          .toList();
+
+                      return Column(
+                        children: items.map((item) {
+                          return ListTile(
+                            title: Text(
+                                '${item.nombre} (x${item.cantidad}) - \$${item.precio}'),
+                            subtitle: Text(item.notas.isNotEmpty
+                                ? 'Notas: ${item.notas}'
+                                : 'Sin notas'),
+                          );
+                        }).toList(),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  if (estado == 'pendiente')
+                    ElevatedButton(
+                      onPressed: () => _marcarPedidoListo(context, pedidoId),
+                      child: const Text('Marcar como Listo'),
+                    ),
+                  const SizedBox(height: 10),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
